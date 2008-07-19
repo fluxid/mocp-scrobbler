@@ -15,6 +15,8 @@ _CLIENTVER = '1.0'
 _USER = 'fluxid'
 _PASS = 'wtmicros'
 
+_SCROB_FRAC = 0.9
+
 session = ''
 np_link = ''
 sub_link = ''
@@ -26,17 +28,17 @@ class FailedException(Exception): pass
 class BadSessionException(Exception): pass
 class HardErrorException(Exception): pass
 
-def send_data(url, data):
+def send_data(url, datax):
 	url2 = urlparse(url)
 	host = url2[1]
 	request = (url2[2] or '/') + (url2[4] and '?' + url2[4])
 	
 	boundary = '--31337_36669_MIME_Boundary_Shit'
 	
-	for (key, val) in data.iteritems():
-		data = []
+	data = []
+	for (key, val) in datax.iteritems():
 		data.append('--' + boundary)
-		data.append('Content-Disposition: form-data; name="%s"' % key)
+		data.append('Content-Disposition: form-data; name="%s";' % key)
 		data.append('Content-Type: text/plain')
 		data.append('')
 		data.append(val)
@@ -44,6 +46,7 @@ def send_data(url, data):
 	
 	data.append('--' + boundary + '--')
 	data2 = '\r\n'.join(data)
+	print data2
 	
 	http = httplib.HTTPConnection(host)
 	http.putrequest('POST', request)
@@ -53,8 +56,22 @@ def send_data(url, data):
 	http.endheaders()
 	http.send(data2)
 	return http.getresponse().read()
-	http.close()
-	del data, data2
+
+def send_encoded(url, data):
+	url2 = urlparse(url)
+	host = url2[1]
+	request = (url2[2] or '/') + (url2[4] and '?' + url2[4])
+	
+	data2 = urllib.urlencode(data)
+	
+	http = httplib.HTTPConnection(host)
+	http.putrequest('POST', request)
+	http.putheader('Content-Type', 'application/x-www-form-urlencoded')
+	http.putheader('User-Agent', 'Fluxid MOC Scrobbler 0.1 Alpha')
+	http.putheader('Content-Length', str(len(data2)))
+	http.endheaders()
+	http.send(data2)
+	return http.getresponse().read()
 
 def authorize():
 	global token
@@ -94,30 +111,53 @@ def get_mocp():
 	mocp.close()
 	return info
 
-def nowplaying(artist, title, album, length):
-	print 'Wysłano nowplaying'
-	print send_data(np_link, {'s': session, 'a': artist, 't': title, 'b': album, 'l': length, 'n': '', 'm': ''})
+def now_playing(track):
+	print send_encoded(np_link, {'s': session, 'a': track['Artist'], 't': track['SongTitle'], 'b': track['Album'], 'l': track['TotalSec'], 'n': '', 'm': ''})
 
-def scrobble():
+def scrobble(track):
 	print 'Scrobbled!'
+	print send_encoded(sub_link, {'s': session, 'a[0]': track['Artist'], 't[0]': track['SongTitle'], 'i[0]': int(time.time()), 'o[0]': 'P', 'r[0]': '', 'l[0]': track['TotalSec'], 'b[0]': track['Album'], 'n[0]': '', 'm[0]': ''})
+
+
+def diff(track1, track2):
+	return not (track1['Artist'].lower() == track2['Artist'].lower() and track1['SongTitle'].lower() == track2['SongTitle'].lower())
+
+def can_scrobble(track):
+	return ((int(track['TotalSec']) >= 240) and (int(track['CurrentSec']) > (float(track['TotalSec']) * _SCROB_FRAC)))
+
+def can_scrobble2(track):
+	return ((int(track['TotalSec']) >= 240) and (int(track['CurrentSec']) > (float(track['TotalSec']) * 0.5)))
 
 def main():
 	authorize()
 	oldtrack = None
 	newtrack = None
-	scrobbled = False
+	unscrobbled = True
+	counter = 0
 	while True:
 		newtrack = get_mocp()
 		if newtrack['State'] == 'PLAY':
-			nowplaying(newtrack['Artist'], newtrack['SongTitle'], newtrack['Album'], newtrack['TotalSec'])
 			if oldtrack:
-				if not (oldtrack['Artist'].lower() == newtrack['Artist'].lower() and oldtrack['SongTitle'].lower() == newtrack['SongTitle'].lower()):
-					if not scrobbled:
-						pass
-						# TODO
+				if diff(oldtrack, newtrack):
+					if unscrobbled and can_scrobble2(oldtrack):
+						scrobble(oldtrack)
+					oldtrack = newtrack
+					unscrobbled = True
+					counter = 0
+				
+				if unscrobbled and can_scrobble(newtrack):
+					scrobble(newtrack)
+					unscrobbled = False
+						
+				if unscrobbled:
+					if counter == 0:
+						now_playing(newtrack)
+					counter += 1
+					counter %= 4
 			else:
 				oldtrack = newtrack
-		time.sleep(10)
+				continue
+		time.sleep(5)
 #	print session, np_link, sub_link
 #	try:
 #		pid = os.fork()
