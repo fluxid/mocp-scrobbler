@@ -28,35 +28,6 @@ class FailedException(Exception): pass
 class BadSessionException(Exception): pass
 class HardErrorException(Exception): pass
 
-def send_data(url, datax):
-	url2 = urlparse(url)
-	host = url2[1]
-	request = (url2[2] or '/') + (url2[4] and '?' + url2[4])
-	
-	boundary = '--31337_36669_MIME_Boundary_Shit'
-	
-	data = []
-	for (key, val) in datax.iteritems():
-		data.append('--' + boundary)
-		data.append('Content-Disposition: form-data; name="%s";' % key)
-		data.append('Content-Type: text/plain')
-		data.append('')
-		data.append(val)
-		data.append('')
-	
-	data.append('--' + boundary + '--')
-	data2 = '\r\n'.join(data)
-	print data2
-	
-	http = httplib.HTTPConnection(host)
-	http.putrequest('POST', request)
-	http.putheader('Content-Type', 'multipart/form-data; boundary=' + boundary)
-	http.putheader('User-Agent', 'Fluxid MOC Scrobbler 0.1 Alpha')
-	http.putheader('Content-Length', str(len(data2)))
-	http.endheaders()
-	http.send(data2)
-	return http.getresponse().read()
-
 def send_encoded(url, data):
 	url2 = urlparse(url)
 	host = url2[1]
@@ -64,14 +35,21 @@ def send_encoded(url, data):
 	
 	data2 = urllib.urlencode(data)
 	
-	http = httplib.HTTPConnection(host)
-	http.putrequest('POST', request)
-	http.putheader('Content-Type', 'application/x-www-form-urlencoded')
-	http.putheader('User-Agent', 'Fluxid MOC Scrobbler 0.1 Alpha')
-	http.putheader('Content-Length', str(len(data2)))
-	http.endheaders()
-	http.send(data2)
-	return http.getresponse().read()
+	try:
+		http = httplib.HTTPConnection(host)
+		http.putrequest('POST', request)
+		http.putheader('Content-Type', 'application/x-www-form-urlencoded')
+		http.putheader('User-Agent', 'Fluxid MOC Scrobbler 0.1 Alpha')
+		http.putheader('Content-Length', str(len(data2)))
+		http.endheaders()
+		http.send(data2)
+		response = http.getresponse().read().upper().strip()
+	except:
+		raise HardErrorException
+	if response == 'BADSESSION':
+		raise BadSessionException
+	elif response.startswith('FAILED'):
+		raise FailedException, f[0].split(' ', 1)[1].strip()
 
 def authorize():
 	global token
@@ -112,15 +90,14 @@ def get_mocp():
 	return info
 
 def now_playing(track):
-	print send_encoded(np_link, {'s': session, 'a': track['Artist'], 't': track['SongTitle'], 'b': track['Album'], 'l': track['TotalSec'], 'n': '', 'm': ''})
+	send_encoded(np_link, {'s': session, 'a': track['Artist'], 't': track['SongTitle'], 'b': track['Album'], 'l': track['TotalSec'], 'n': '', 'm': ''})
 
 def scrobble(track):
-	print 'Scrobbled!'
-	print send_encoded(sub_link, {'s': session, 'a[0]': track['Artist'], 't[0]': track['SongTitle'], 'i[0]': int(time.time()), 'o[0]': 'P', 'r[0]': '', 'l[0]': track['TotalSec'], 'b[0]': track['Album'], 'n[0]': '', 'm[0]': ''})
-
+	'Scrobbled!'
+	send_encoded(sub_link, {'s': session, 'a[0]': track['Artist'], 't[0]': track['SongTitle'], 'i[0]': int(time.time()), 'o[0]': 'P', 'r[0]': '', 'l[0]': track['TotalSec'], 'b[0]': track['Album'], 'n[0]': '', 'm[0]': ''})
 
 def diff(track1, track2):
-	return not (track1['Artist'].lower() == track2['Artist'].lower() and track1['SongTitle'].lower() == track2['SongTitle'].lower())
+	return not ( (track1['Artist'].lower() == track2['Artist'].lower()) and (track1['SongTitle'].lower() == track2['SongTitle'].lower()) )
 
 def can_scrobble(track):
 	return ((int(track['TotalSec']) >= 240) and (int(track['CurrentSec']) > (float(track['TotalSec']) * _SCROB_FRAC)))
@@ -130,34 +107,44 @@ def can_scrobble2(track):
 
 def main():
 	authorize()
-	oldtrack = None
-	newtrack = None
 	unscrobbled = True
-	counter = 0
+	unnotified = True
+	
+	newtrack = get_mocp()
+	oldtrack = newtrack
 	while True:
-		newtrack = get_mocp()
-		if newtrack['State'] == 'PLAY':
-			if oldtrack:
-				if diff(oldtrack, newtrack):
-					if unscrobbled and can_scrobble2(oldtrack):
-						scrobble(oldtrack)
-					oldtrack = newtrack
-					unscrobbled = True
-					counter = 0
-				
-				if unscrobbled and can_scrobble(newtrack):
-					scrobble(newtrack)
-					unscrobbled = False
-						
-				if unscrobbled:
-					if counter == 0:
+		try:
+			while True:
+				if newtrack['State'] == 'PLAY':
+					if diff(oldtrack, newtrack):
+						print 'Changed track'
+						if unscrobbled and can_scrobble2(oldtrack):
+							print 'Scrobbled [Change]'
+							scrobble(oldtrack)
+						oldtrack = newtrack
+						unscrobbled = True
+						unnotified = True
+					
+					if unnotified:
+						print 'Notified'
 						now_playing(newtrack)
-					counter += 1
-					counter %= 4
-			else:
-				oldtrack = newtrack
-				continue
-		time.sleep(5)
+						unnotified = False
+			
+					if unscrobbled and can_scrobble(newtrack):
+						print 'Scrobbled [90%]'
+						scrobble(newtrack)
+						unscrobbled = False
+				time.sleep(2)
+				newtrack = get_mocp()
+		except BadSessionException:
+			authorize()
+		except KeyError:
+			pass
+		except KeyboardInterrupt:
+			break
+		else:
+			pass
+
 #	print session, np_link, sub_link
 #	try:
 #		pid = os.fork()
