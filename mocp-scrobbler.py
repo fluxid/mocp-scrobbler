@@ -45,12 +45,14 @@ def send_encoded(url, data):
 		http.endheaders()
 		http.send(data2)
 		response = http.getresponse().read().upper().strip()
-	except:
-		raise HardErrorException
+	except Exception, e:
+		print e
+		print e.message
+		raise HardErrorException, e.message
 	if response == 'BADSESSION':
 		raise BadSessionException
 	elif response.startswith('FAILED'):
-		raise FailedException, f[0].split(' ', 1)[1].strip()
+		raise FailedException, response.split(' ', 1)[1].strip() + (' POST = [%s]' % data2)
 
 def authorize():
 	global token
@@ -75,9 +77,9 @@ def authorize():
 		elif first.startswith('FAILED'):
 			raise FailedException, f[0].split(' ', 1)[1].strip()
 		else:
-			raise HardErrorException
+			raise HardErrorException, 'Received unknown response from server: [%s]' % t
 	else:
-		raise HardErrorException
+		raise HardErrorException, 'Empty response'
 
 def get_mocp():
 	mocp = os.popen("mocp -i")
@@ -165,7 +167,7 @@ def main():
 		try:
 			while True:
 				newtrack = get_mocp()
-				if 'state' in newtrack and newtrack['state'].lower() == 'play':
+				if 'state' in newtrack and newtrack['state'].lower() == 'play' and 'songtitle' in newtrack and newtrack['songtitle'] and 'artist' in newtrack and newtrack['artist']:
 					a = diff(oldtrack, newtrack)
 					b = not a and (int(newtrack['totalsec']) - 15 < maxsec) and (int(newtrack['currentsec']) < 15)
 					if a or b:
@@ -202,8 +204,8 @@ def main():
 		except FailedException, e:
 			print 'Error while submission: general failure. Reason: "%s". Continuing after 5 seconds (scrobbling cache is unimplemented yet)' % e.message
 			time.sleep(5)
-		except HardErrorException:
-			print 'Critical error while submission. Check your internet connection. Trying again after 10 seconds (scrobbling cache is unimplemented yet)'
+		except HardErrorException, e:
+			print 'Critical error while submission. Check your internet connection. Trying again after 10 seconds (scrobbling cache is unimplemented yet). Exception message: "%s"' % e.message
 			time.sleep(10)
 		except KeyboardInterrupt:
 			break
