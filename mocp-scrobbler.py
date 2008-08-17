@@ -46,9 +46,7 @@ def send_encoded(url, data):
 		http.send(data2)
 		response = http.getresponse().read().upper().strip()
 	except Exception, e:
-		print e
-		print e.message
-		raise HardErrorException, e.message
+		raise HardErrorException, str(e)
 	if response == 'BADSESSION':
 		raise BadSessionException
 	elif response.startswith('FAILED'):
@@ -59,7 +57,10 @@ def authorize():
 	timestamp = time.time()
 	token = md5.new(md5.new(_PASS).hexdigest() + str(int(timestamp))).hexdigest()
 	link = 'http://post.audioscrobbler.com/?hs=true&p=1.2.1&c=%s&v=%s&u=%s&t=%d&a=%s'% (_CLIENTNAME, _CLIENTVER, _USER, timestamp, token)
-	f = urllib.urlopen(link)
+	try:
+		f = urllib.urlopen(link)
+	except Exception, e:
+		raise HardErrorException, str(e)
 	if f:
 		f = f.readlines()
 		first = f[0].upper().strip()
@@ -149,8 +150,8 @@ def main():
 	except FailedException, e:
 		print 'Error while authorizing: general failure. Reason: "%s"' % e.message
 		return
-	except HardErrorException:
-		print 'Critical error while authorizing. Check your internet connection and try again. Maybe servers are dead?'
+	except HardErrorException, e:
+		print 'Critical error while authorizing. Check your internet connection and try again. Maybe servers are dead? Reason: "%s"' % e.message
 		return
 	
 	print 'Authorized'
