@@ -9,8 +9,8 @@ import time
 import md5
 import re
 
-_CLIENTNAME = 'tst' # Oficjalny, testowy
-#_CLIENTNAME = 'mcl' # Mój własny, oficjalny
+#_CLIENTNAME = 'tst' # Oficjalny, testowy - NIE DO UŻYTKU PRZEZ SKRYPT FINALNY
+_CLIENTNAME = 'mcl' # Mój własny, oficjalny
 _CLIENTVER = '1.0'
 
 _USER = 'fluxid'
