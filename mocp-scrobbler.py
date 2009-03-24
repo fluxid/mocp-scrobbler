@@ -25,10 +25,6 @@ import getopt
 import signal
 import subprocess
 
-_CLIENTNAME = 'tst' # Audioscrobbler testing name, do not use
-#_CLIENTNAME = 'mcl' # MOC-cli
-_CLIENTVER = '1.0'
-
 _SCROB_FRAC = 0.9
 
 class BannedException(Exception): pass
@@ -133,7 +129,7 @@ class Scrobbler(Thread):
         global token
         timestamp = time.time()
         token = md5(md5(self.password).hexdigest() + str(int(timestamp))).hexdigest()
-        link = 'http://post.audioscrobbler.com/?hs=true&p=1.2.1&c=%s&v=%s&u=%s&t=%d&a=%s' % (_CLIENTNAME, _CLIENTVER, self.login, timestamp, token)
+        link = 'http://post.audioscrobbler.com/?hs=true&p=1.2.1&c=mcl&v=1.0&u=%s&t=%d&a=%s' % (self.login, timestamp, token)
         try:
             f = urllib.urlopen(link)
         except Exception, e:
@@ -304,15 +300,14 @@ def main():
 
     for o, v in opts:
         if o in ('-h', '--help'):
-            print """mocp-pyscrobbler 0.2-rc1
-Usage: %s [--daemon] [--offline] [--verbose | --quiet] [--kill] [--config=FILE]
+            print """mocp-scrobbler.py 0.2-rc1
+Usage: mocp-scrobbler.py [--daemon] [--offline] [--verbose | --quiet] [--kill] [--config=FILE]
   -d, --daemon       Run in background, messages will be written to log file
   -o, --offline      Don't connect to service, put everything in cache
   -v, --verbose      Write more messages to console/log
   -q, --quiet        Write only errors to console/log
   -k, --kill         Kill existing scrobbler instance and exit
-  -c, --config=FILE  Use this file instead of default config
-"""%sys.argv[0]
+  -c, --config=FILE  Use this file instead of default config"""
             return
         if o in ('-d', '--daemon'):
             daemon = True
