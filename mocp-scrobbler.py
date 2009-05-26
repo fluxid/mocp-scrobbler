@@ -87,9 +87,10 @@ class Track(object):
         return '<Track: %s>' % self.__str__()
 
 class Scrobbler(Thread):
-    def __init__(self, login, password):
+    def __init__(self, host, login, password):
         Thread.__init__(self)
 
+        self.host = host
         self.login = login
         self.password = password
         self.session = None
@@ -129,7 +130,7 @@ class Scrobbler(Thread):
         global token
         timestamp = time.time()
         token = md5(md5(self.password).hexdigest() + str(int(timestamp))).hexdigest()
-        link = 'http://post.audioscrobbler.com/?hs=true&p=1.2.1&c=mcl&v=1.0&u=%s&t=%d&a=%s' % (self.login, timestamp, token)
+        link = 'http://%s/?hs=true&p=1.2.1&c=mcl&v=1.0&u=%s&t=%d&a=%s' % (self.host, self.login, timestamp, token)
         try:
             f = urllib.urlopen(link)
         except Exception, e:
@@ -402,7 +403,7 @@ Usage: mocp-scrobbler.py [--daemon] [--offline] [--verbose | --quiet] [--kill] [
         lout = logging.StreamHandler(sys.stdout)
         logger.addHandler(lout)
 
-    lastfm = Scrobbler(login, password)
+    lastfm = Scrobbler('post.audioscrobbler.com', login, password)
     lastfm.logger = logger
     
     if not offline:
