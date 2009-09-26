@@ -34,32 +34,15 @@ class FailedException(Exception): pass
 class BadSessionException(Exception): pass
 class HardErrorException(Exception): pass
 
+INFO_RE = re.compile(r'^([a-zA-Z]+):\s*(.+)$')
+
 class Track(object):
     def __init__(self, artist, title, album, position=0, length=0):
-        if artist:
-            self.artist = artist.strip()
-        else:
-            self.artist = ''
-
-        if title:
-            self.title = title.strip()
-        else:
-            self.title = ''
-
-        if album:
-            self.album = album.strip()
-        else:
-            self.album = ''
-
-        if length:
-            self.length = int(length)
-        else:
-            self.length = 0
-
-        if position:
-            self.position = int(position)
-        else:
-            self.position = 0
+        self.artist = artist.strip() if artist else ''
+        self.title = title.strip() if title else ''
+        self.album = album.strip() if album else ''
+        self.length = int(length) if length else 0
+        self.position = int(position) if position else 0
 
     def __eq__(self, other):
         return (isinstance(other, self.__class__) and
@@ -84,7 +67,7 @@ class Track(object):
             return 'None'
 
     def __repr__(self):
-        return '<Track: %s>' % self.__str__()
+        return u'<Track: %s>' % self.__str__().encode('utf8')
 
 class Scrobbler(Thread):
     def __init__(self, host, login, password):
@@ -114,7 +97,7 @@ class Scrobbler(Thread):
             http = httplib.HTTPConnection(host)
             http.putrequest('POST', request)
             http.putheader('Content-Type', 'application/x-www-form-urlencoded')
-            http.putheader('User-Agent', 'Fluxid MOC Scrobbler 0.2 Alpha')
+            http.putheader('User-Agent', 'Fluxid MOC Scrobbler 0.2')
             http.putheader('Content-Length', str(len(data2)))
             http.endheaders()
             http.send(data2)
@@ -186,12 +169,12 @@ class Scrobbler(Thread):
 
     def submit_notify(self, track):
         self.send_encoded(self.np_link, {'s': self.session,
-                                    'a': track.artist,
-                                    't': track.title,
-                                    'b': track.album,
-                                    'l': track.length or '',
-                                    'n': '',
-                                    'm': ''})
+                                         'a': track.artist,
+                                         't': track.title,
+                                         'b': track.album,
+                                         'l': track.length or '',
+                                         'n': '',
+                                         'm': ''})
 
     def run(self):
         if not self._authorized: return
@@ -200,6 +183,7 @@ class Scrobbler(Thread):
             try:
                 if self.cache:
                     slice = self.cache[0:10]
+                    print slice
                     self.logger.debug('Scrobbling: %s' % slice)
                     self.submit_scrobble(slice)
                     self.logger.debug('Scrobbled')
@@ -227,47 +211,23 @@ class Scrobbler(Thread):
 
 def get_mocp():
     info = {}
-    test = re.compile(r'^[a-zA-Z]+: .*')
     try:
         p = subprocess.Popen('mocp -i', shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, close_fds=True)
     except:
         return (None, 'stop')
-    (i, o, pid) = (p.stdin, p.stdout, p.pid)
-    for line in o:
-        if test.match(line):
-            x = line.split(': ', 1)
-            info[x[0].lower()] = x[1].strip()
-    o.close()
-    i.close()
-    try:
-        os.waitpid(pid, 0)
-    except:
-        pass
+    pstdout, pstderr = p.communicate()
+    for line in pstdout.splitlines():
+        m = INFO_RE.match(line)
+        if m:
+            key, value = m.groups()
+            if value:
+                info[key.lower()] = value.strip()
 
-    if 'artist' in info:
-        artist = info['artist']
-    else:
-        artist = ''
-
-    if 'songtitle' in info:
-        title = info['songtitle']
-    else:
-        title = ''
-
-    if 'album' in info:
-        album = info['album']
-    else:
-        album = ''
-
-    if 'currentsec' in info:
-        position = info['currentsec']
-    else:
-        position = 0
-
-    if 'totalsec' in info:
-        length = info['totalsec']
-    else:
-        length = 0
+    artist = info.get('artist', '')
+    title = info.get('songtitle', '')
+    album = info.get('album', '')
+    position = info.get('currentsec', 0)
+    length = info.get('totalsec', 0)
     
     state = 'stop'
     if 'state' in info:
@@ -301,27 +261,24 @@ def main():
 
     for o, v in opts:
         if o in ('-h', '--help'):
-            print """mocp-scrobbler.py 0.2-rc1
-Usage: mocp-scrobbler.py [--daemon] [--offline] [--verbose | --quiet] [--kill] [--config=FILE]
-  -d, --daemon       Run in background, messages will be written to log file
-  -o, --offline      Don't connect to service, put everything in cache
-  -v, --verbose      Write more messages to console/log
-  -q, --quiet        Write only errors to console/log
-  -k, --kill         Kill existing scrobbler instance and exit
-  -c, --config=FILE  Use this file instead of default config"""
+            print """mocp-scrobbler.py 0.2-rc1"""
+            """Usage: mocp-scrobbler.py [--daemon] [--offline] [--verbose | --quiet] [--kill] [--config=FILE]"""
+            """  -d, --daemon       Run in background, messages will be written to log file"""
+            """  -o, --offline      Don't connect to service, put everything in cache"""
+            """  -v, --verbose      Write more messages to console/log"""
+            """  -q, --quiet        Write only errors to console/log"""
+            """  -k, --kill         Kill existing scrobbler instance and exit"""
+            """  -c, --config=FILE  Use this file instead of default config"""
             return
-        if o in ('-d', '--daemon'):
-            daemon = True
-        if o in ('-o', '--offline'):
-            offline = True
+        daemon = o in ('-d', '--daemon')
+        offline = o in ('-o', '--offline')
         if o in ('-v', '--verbose'):
             verbose = True
             quiet = False
         if o in ('-q', '--quiet'):
             quiet = True
             verbose = False
-        if o in ('-k', '--kill'):
-            kill = True
+        kill = o in ('-k', '--kill')
         if o in ('-c', '--config'):
             configfile = v
     
@@ -356,6 +313,7 @@ Usage: mocp-scrobbler.py [--daemon] [--offline] [--verbose | --quiet] [--kill] [
         config.read(configpath)
         login = config.get('scrobbler', 'login')
         password = config.get('scrobbler', 'password')
+        streams = config.get('scrobbler', 'password')
     except:
         print >>sys.stderr, 'Not configured. Edit file: %s' % configpath
         return
