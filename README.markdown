@@ -4,7 +4,7 @@ Last.fm scrobbler for MOC audio player with support for now-playing notification
 Works with  internet streams (with properly set tags) and scrobbles on 90% of track. Supports scrobbling of looped track too.
 
     # mocp-scrobbler.py --help
-    mocp-scrobbler.py 0.2-rc1
+    mocp-scrobbler.py 0.2
     Usage: mocp-scrobbler.py [--daemon] [--offline] [--verbose | --quiet] [--kill] [--config=FILE]
       -d, --daemon       Run in background, messages will be written to log file
       -o, --offline      Don't connect to service, put everything in cache

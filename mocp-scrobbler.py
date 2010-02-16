@@ -28,12 +28,19 @@ import locale
 
 _SCROB_FRAC = 0.9
 
-class BannedException(Exception): pass
-class BadAuthException(Exception): pass
-class BadTimeException(Exception): pass
-class FailedException(Exception): pass
-class BadSessionException(Exception): pass
-class HardErrorException(Exception): pass
+class ScrobException(Exception):
+    def __init__(self, message=''):
+        self._message = message
+    
+    def __str__(self):
+        return self._message
+
+class BannedException(ScrobException): pass
+class BadAuthException(ScrobException): pass
+class BadTimeException(ScrobException): pass
+class FailedException(ScrobException): pass
+class BadSessionException(ScrobException): pass
+class HardErrorException(ScrobException): pass
 
 INFO_RE = re.compile(r'^([a-zA-Z]+):\s*(.+)$')
 
@@ -228,9 +235,37 @@ class Scrobbler(Thread):
         return u'[%s]' % x
 
     def run(self):
-        if not self._authorized: return
         self._running = True
         while self._running:
+            if not self._authorized:
+                self.logger.debug(u'Authorizing')
+                errord = 0
+                try:
+                    self.authorize()
+                except BannedException:
+                    self.logger.error(u'Error while authorizing: your account is banned.')
+                    errord = 1
+                except BadAuthException:
+                    self.logger.error(u'Error while authorizing: incorrect username or password. Please check your login settings.')
+                    errord = 1
+                except BadTimeException:
+                    self.logger.error(u'Error while authorizing: incorrect time setting. Please check your clock settings.')
+                    errord = 1
+                except FailedException, e:
+                    self.logger.error(u'Error while authorizing: general failure. Will try again after one minute. Reason: "%s"' % str(e))
+                    errord = 2
+                except HardErrorException, e:
+                    self.logger.error(u'Critical error while authorizing. Check your internet connection. Or maybe servers are dead? Will try again after one minute. Reason: "%s"' % str(e))
+                    errord = 2
+
+                if errord == 1:
+                    self.logger.info(u'Scrobbler will work in offline mode')
+                    self._running = False
+                elif errord == 2:
+                    self.nice_sleep(60)
+
+                continue
+
             try:
                 if self.cache:
                     slice = self.cache[:10]
@@ -250,14 +285,21 @@ class Scrobbler(Thread):
 
                 time.sleep(1)
             except BadSessionException:
-                self.logger.warning(u'Session timed out, authorizing')
-                self.authorize() # Exceptions later
+                self.logger.debug(u'Session timed out')
+                self._authorized = False
             except FailedException, e:
-                self.logger.error(u'Error while submission: general failure. Trying again after 5 seconds. Reason: "%s".' % e.message)
-                time.sleep(5)
+                self.logger.error(u'Error while submission: general failure. Trying again after 10 seconds. Reason: "%s".' % str(e))
+                self.nice_sleep(10)
             except HardErrorException, e:
-                self.logger.error(u'Critical error while submission. Check your internet connection. Trying again after 5 seconds. Exception was: "%s"' % e.message)
-                time.sleep(5)
+                self.logger.error(u'Critical error while submission. Check your internet connection. Trying again after 10 seconds. Exception was: "%s"' % str(e))
+                self.nice_sleep(10)
+
+    def nice_sleep(self, seconds):
+        # This way, so we can quit nicely while waiting
+        counter = 0
+        while self._running and counter < seconds:
+            time.sleep(1)
+            counter += 1
 
     def stop(self):
         self._running = False
@@ -319,7 +361,7 @@ def main():
 
     for o, v in opts:
         if o in ('-h', '--help'):
-            print 'mocp-scrobbler.py 0.2-rc1\n' \
+            print 'mocp-scrobbler.py 0.2\n' \
             'Usage: mocp-scrobbler.py [--daemon] [--offline] [--verbose | --quiet] [--kill] [--config=FILE]\n' \
             '  -d, --daemon       Run in background, messages will be written to log file\n' \
             '  -o, --offline      Don\'t connect to service, put everything in cache\n' \
@@ -405,7 +447,7 @@ def main():
 
     if forked:
         try:
-            lout = logging.FileHandler(logfile, 'w')
+            lout = StupidFileHandler(logfile, 'w')
         except:
             try:
                 logfile = os.getenv('TEMP', '/tmp/') + 'mocp-pyscrobbler.log'
@@ -423,28 +465,7 @@ def main():
     lastfm.logger = logger
     
     if not offline:
-        errord = False
-        try:
-            logger.info(u'Authorizing')
-            lastfm.authorize()
-            lastfm.start()
-        except BannedException:
-            logger.error(u'Error while authorizing: your account is banned.')
-            errord = True
-        except BadAuthException:
-            logger.error(u'Error while authorizing: incorrect username or password. Please check your login settings and try again.')
-            errord = True
-        except BadTimeException:
-            logger.error(u'Error while authorizing: incorrect time setting. Please check your clock settings and try again.')
-            errord = True
-        except FailedException, e:
-            logger.error(u'Error while authorizing: general failure. Reason: "%s"' % e.message)
-            errord = True
-        except HardErrorException, e:
-            logger.error(u'Critical error while authorizing. Check your internet connection and try again. Maybe servers are dead? Reason: "%s"' % e.message)
-            errord = True
-        if errord:
-            logger.info(u'Scrobbler will work in offline mode')
+        lastfm.start()
 
     try:
         cachefile = file(cachepath, 'r')
