@@ -157,7 +157,7 @@ class Scrobbler(Thread):
             raise FailedException, response.split(' ', 1)[1].strip() + (' POST = [%s]' % data2)
 
     def authorize(self):
-        global token
+        self.logger.debug(u'Authorizing')
         timestamp = time.time()
         token = md5(md5(self.password).hexdigest() + str(int(timestamp))).hexdigest()
         link = 'http://%s/?hs=true&p=1.2.1&c=mcl&v=1.0&u=%s&t=%d&a=%s' % (self.host, self.login, timestamp, token)
@@ -238,7 +238,6 @@ class Scrobbler(Thread):
         self._running = True
         while self._running:
             if not self._authorized:
-                self.logger.debug(u'Authorizing')
                 errord = 0
                 try:
                     self.authorize()
