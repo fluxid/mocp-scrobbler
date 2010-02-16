@@ -319,14 +319,14 @@ def main():
 
     for o, v in opts:
         if o in ('-h', '--help'):
-            print """mocp-scrobbler.py 0.2-rc1"""
-            """Usage: mocp-scrobbler.py [--daemon] [--offline] [--verbose | --quiet] [--kill] [--config=FILE]"""
-            """  -d, --daemon       Run in background, messages will be written to log file"""
-            """  -o, --offline      Don't connect to service, put everything in cache"""
-            """  -v, --verbose      Write more messages to console/log"""
-            """  -q, --quiet        Write only errors to console/log"""
-            """  -k, --kill         Kill existing scrobbler instance and exit"""
-            """  -c, --config=FILE  Use this file instead of default config"""
+            print 'mocp-scrobbler.py 0.2-rc1\n' \
+            'Usage: mocp-scrobbler.py [--daemon] [--offline] [--verbose | --quiet] [--kill] [--config=FILE]\n' \
+            '  -d, --daemon       Run in background, messages will be written to log file\n' \
+            '  -o, --offline      Don\'t connect to service, put everything in cache\n' \
+            '  -v, --verbose      Write more messages to console/log\n' \
+            '  -q, --quiet        Write only errors to console/log\n' \
+            '  -k, --kill         Kill existing scrobbler instance and exit\n' \
+            '  -c, --config=FILE  Use this file instead of default config'
             return
         daemon = o in ('-d', '--daemon')
         offline = o in ('-o', '--offline')
