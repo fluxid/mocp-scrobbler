@@ -24,6 +24,7 @@ import logging
 import getopt
 import signal
 import subprocess
+import locale
 
 _SCROB_FRAC = 0.9
 
@@ -36,13 +37,46 @@ class HardErrorException(Exception): pass
 
 INFO_RE = re.compile(r'^([a-zA-Z]+):\s*(.+)$')
 
+class NullHandler(logging.Handler):
+    def emit(record):
+        pass
+
+# I'm tired, hungry and pissed off now, so i'm writing this little piece
+# of crap because i can't think of anything better at this moment
+
+class StupidStreamHandler(logging.Handler):
+    def __init__(self, stream, level=logging.NOTSET):
+        self.s = stream
+        logging.Handler.__init__(self, level)
+        self.encoding = locale.getpreferredencoding()
+    
+    def emit(self, record):
+        msg = self.format(record)
+        if isinstance(msg, unicode):
+            msg = msg.encode(self.encoding, 'replace')
+        self.s.write(msg)
+        self.s.write('\n')
+        self.flush()
+
+class StupidFileHandler(StupidStreamHandler):
+    def __init__(self, fname, fwrite, level=logging.NOTSET):
+        f = open(fname, fwrite)
+        logging.Handler.__init__(self, f, level)
+        self.encoding = 'utf-8'
+    
+    def close(self):
+        logging.Handler.close(self)
+        self.f.close()
+
+# /crap
+
 class Track(object):
     def __init__(self, artist, title, album, position=0, length=0):
         self.artist = artist.strip() if artist else ''
         self.title = title.strip() if title else ''
         self.album = album.strip() if album else ''
-        self.length = int(length) if length else 0
-        self.position = int(position) if position else 0
+        self.length = int(length)
+        self.position = int(position)
 
     def __eq__(self, other):
         return (isinstance(other, self.__class__) and
@@ -57,17 +91,21 @@ class Track(object):
             return True
         return False
 
-    def __str__(self):
+    def __unicode__(self):
         if self.artist and self.title:
             if self.album:
-                return '%s - %s (%s)' % (self.artist, self.title, self.album)
+                return u'%s - %s (%s)' % (self.artist, self.title, self.album)
             else:
-                return '%s - %s' % (self.title, self.artist)
+                return u'%s - %s' % (self.title, self.artist)
         else:
-            return 'None'
+            return u'None'
+
+    def __str__(self):
+        return self.__unicode__().encode(locale.getpreferredencoding())
 
     def __repr__(self):
-        return u'<Track: %s>' % self.__str__().encode('utf8')
+        # It seems repr must be str not unicode...
+        return '<Track: %s>' % self
 
 class Scrobbler(Thread):
     def __init__(self, host, login, password):
@@ -91,6 +129,8 @@ class Scrobbler(Thread):
         host = url2[1]
         request = (url2[2] or '/') + (url2[4] and '?' + url2[4])
         
+        data = data.copy()
+        data = dict([ (k.encode('utf-8'), v.encode('utf-8') if isinstance(v, unicode) else str(v)) for k, v in data.iteritems()])
         data2 = urllib.urlencode(data)
         
         try:
@@ -134,9 +174,9 @@ class Scrobbler(Thread):
             elif first.startswith('FAILED'):
                 raise FailedException, f[0].split(' ', 1)[1].strip()
             else:
-                raise HardErrorException, 'Received unknown response from server: [%s]' % t
+                raise HardErrorException, u'Received unknown response from server: [%s]' % t
         else:
-            raise HardErrorException, 'Empty response'
+            raise HardErrorException, u'Empty response'
         self._authorized = True
 
     def scrobble(self, track, stream = False):
@@ -156,25 +196,36 @@ class Scrobbler(Thread):
         data = { 's': self.session }
         for i in range(len(tracks)):
             track, source, time = tracks[i]
-            data.update({'a[%d]'%i: track.artist,
-                         't[%d]'%i: track.title,
-                         'i[%d]'%i: time,
-                         'o[%d]'%i: source,
-                         'r[%d]'%i: '',
-                         'l[%d]'%i: track.length or '',
-                         'b[%d]'%i: track.album,
-                         'n[%d]'%i: '',
-                         'm[%d]'%i: ''})
+            data.update({
+                'a[%d]'%i: track.artist,
+                't[%d]'%i: track.title,
+                'i[%d]'%i: time,
+                'o[%d]'%i: source,
+                'r[%d]'%i: '',
+                'l[%d]'%i: track.length or '',
+                'b[%d]'%i: track.album,
+                'n[%d]'%i: '',
+                'm[%d]'%i: '',
+            })
         self.send_encoded(self.sub_link, data)
 
     def submit_notify(self, track):
-        self.send_encoded(self.np_link, {'s': self.session,
-                                         'a': track.artist,
-                                         't': track.title,
-                                         'b': track.album,
-                                         'l': track.length or '',
-                                         'n': '',
-                                         'm': ''})
+        self.send_encoded(self.np_link, {
+            's': self.session,
+            'a': track.artist,
+            't': track.title,
+            'b': track.album,
+            'l': track.length or '',
+            'n': '',
+            'm': '',
+        })
+    
+    def format_scrobbles(self, scrobbles):
+        x = u', '.join([
+            unicode(s[0])
+            for s in scrobbles
+        ])
+        return u'[%s]' % x
 
     def run(self):
         if not self._authorized: return
@@ -182,28 +233,30 @@ class Scrobbler(Thread):
         while self._running:
             try:
                 if self.cache:
-                    slice = self.cache[0:10]
-                    print slice
-                    self.logger.debug('Scrobbling: %s' % slice)
+                    slice = self.cache[:10]
+                    if len(slice) == 1:
+                        self.logger.debug(u'Submitting track: %s' % slice[0][0])
+                    else:
+                        self.logger.debug(u'Submitting %d tracks: %s' % (len(slice), self.format_scrobbles(slice)))
                     self.submit_scrobble(slice)
-                    self.logger.debug('Scrobbled')
+                    self.logger.debug(u'Submitted')
                     del self.cache[0:len(slice)]
 
                 if self.playing and not self.notify_sent:
-                    self.logger.debug('Sending notify')
+                    self.logger.debug(u'Sending notify')
                     self.submit_notify(self.playing)
-                    self.logger.debug('Notify sent')
+                    self.logger.debug(u'Notify sent')
                     self.notify_sent = True
 
                 time.sleep(1)
             except BadSessionException:
-                self.logger.warning('Session timed out, authorizing')
+                self.logger.warning(u'Session timed out, authorizing')
                 self.authorize() # Exceptions later
             except FailedException, e:
-                self.logger.error('Error while submission: general failure. Trying again after 5 seconds. Reason: "%s".' % e.message)
+                self.logger.error(u'Error while submission: general failure. Trying again after 5 seconds. Reason: "%s".' % e.message)
                 time.sleep(5)
             except HardErrorException, e:
-                self.logger.error('Critical error while submission. Check your internet connection. Trying again after 5 seconds. Exception was: "%s"' % e.message)
+                self.logger.error(u'Critical error while submission. Check your internet connection. Trying again after 5 seconds. Exception was: "%s"' % e.message)
                 time.sleep(5)
 
     def stop(self):
@@ -221,7 +274,7 @@ def get_mocp():
         if m:
             key, value = m.groups()
             if value:
-                info[key.lower()] = value.strip()
+                info[key.lower()] = value.strip().decode('utf8', 'replace') # mocp -i output isn't depended on locale
 
     artist = info.get('artist', '')
     title = info.get('songtitle', '')
@@ -235,6 +288,11 @@ def get_mocp():
     return (Track(artist, title, album, position, length), state)
 
 def main():
+    try:
+        locale.setlocale(locale.LC_ALL)
+    except:
+        pass
+
     path = os.path.expanduser('~/.mocpscrob/')
     configpath = path + 'config'
     cachepath = path + 'cache'
@@ -302,7 +360,7 @@ def main():
         if not quiet: print 'Pidfile not found.'
 
     if os.path.isfile(pidfile):
-        print "Waiting for existing process to end..."
+        print 'Waiting for existing process to end...'
         while os.path.isfile(pidfile):
             time.sleep(1)
     
@@ -342,7 +400,7 @@ def main():
         print >>f, os.getpid()
         f.close()
     except Exception, e:
-        print logger.error('Can\'t write to pidfile, exiting')
+        print logger.error(u'Can\'t write to pidfile, exiting')
         return
 
     if forked:
@@ -351,14 +409,14 @@ def main():
         except:
             try:
                 logfile = os.getenv('TEMP', '/tmp/') + 'mocp-pyscrobbler.log'
-                lout = logging.FileHandler(logfile, 'w')
+                lout = StupidFileHandler(logfile, 'w')
             except:
-                lout = logging.FileHandler('/dev/null', 'w') # n/c
-        formatter = logging.Formatter('%(levelname)s %(asctime)s %(message)s')
+                lout = NullHandler()
+        formatter = logging.Formatter(u'%(levelname)s %(asctime)s %(message)s')
         lout.setFormatter(formatter)
         logger.addHandler(lout)
     else:
-        lout = logging.StreamHandler(sys.stdout)
+        lout = StupidStreamHandler(sys.stdout)
         logger.addHandler(lout)
 
     lastfm = Scrobbler('post.audioscrobbler.com', login, password)
@@ -367,26 +425,26 @@ def main():
     if not offline:
         errord = False
         try:
-            logger.info('Authorizing')
+            logger.info(u'Authorizing')
             lastfm.authorize()
             lastfm.start()
         except BannedException:
-            logger.error('Error while authorizing: your account is banned.')
+            logger.error(u'Error while authorizing: your account is banned.')
             errord = True
         except BadAuthException:
-            logger.error('Error while authorizing: incorrect username or password. Please check your login settings and try again.')
+            logger.error(u'Error while authorizing: incorrect username or password. Please check your login settings and try again.')
             errord = True
         except BadTimeException:
-            logger.error('Error while authorizing: incorrect time setting. Please check your clock settings and try again.')
+            logger.error(u'Error while authorizing: incorrect time setting. Please check your clock settings and try again.')
             errord = True
         except FailedException, e:
-            logger.error('Error while authorizing: general failure. Reason: "%s"' % e.message)
+            logger.error(u'Error while authorizing: general failure. Reason: "%s"' % e.message)
             errord = True
         except HardErrorException, e:
-            logger.error('Critical error while authorizing. Check your internet connection and try again. Maybe servers are dead? Reason: "%s"' % e.message)
+            logger.error(u'Critical error while authorizing. Check your internet connection and try again. Maybe servers are dead? Reason: "%s"' % e.message)
             errord = True
         if errord:
-            logger.info('Scrobbler will work in offline mode')
+            logger.info(u'Scrobbler will work in offline mode')
 
     try:
         cachefile = file(cachepath, 'r')
@@ -412,7 +470,7 @@ def main():
     running = True
     def handler(i, j):
         global running
-        logger.info('Got signal, shutting down...')
+        logger.info(u'Got signal, shutting down...')
         running = False
         signal.signal(signal.SIGQUIT, signal.SIG_IGN)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -442,18 +500,18 @@ def main():
                         
                         if unscrobbled and toscrobble:
                             if state == 'stop':
-                                logger.info('Scrobbling [on stop]')
+                                logger.info(u'Scrobbling [on stop]')
                             else:
-                                logger.info('Scrobbling [on change]')
+                                logger.info(u'Scrobbling [on change]')
                             lastfm.scrobble(oldtrack, not oldtrack.length)
 
                     if newtrack:
                         if not newtrack.length:
-                            logger.info('Now playing (stream): %s' % newtrack)
+                            logger.info(u'Now playing (stream): %s' % newtrack)
                         elif b:
-                            logger.info('Now playing (repeated): %s' % newtrack)
+                            logger.info(u'Now playing (repeated): %s' % newtrack)
                         else:
-                            logger.info('Now playing: %s' % newtrack)
+                            logger.info(u'Now playing: %s' % newtrack)
                     
                     if state != 'stop':
                         oldtrack = newtrack
@@ -474,7 +532,7 @@ def main():
                     unnotified = False
                 
                 if newtrack and unscrobbled and newtrack.length >= 30 and (newtrack.position > newtrack.length * _SCROB_FRAC):
-                    logger.info('Scrobbling [on %d%%]' % int(_SCROB_FRAC * 100))
+                    logger.info(u'Scrobbling [on %d%%]' % int(_SCROB_FRAC * 100))
                     lastfm.scrobble(newtrack)
                     unscrobbled = False
                 
