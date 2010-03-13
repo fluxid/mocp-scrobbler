@@ -68,7 +68,8 @@ class StupidStreamHandler(logging.Handler):
 class StupidFileHandler(StupidStreamHandler):
     def __init__(self, fname, fwrite, level=logging.NOTSET):
         f = open(fname, fwrite)
-        logging.Handler.__init__(self, f, level)
+        StupidStreamHandler.__init__(self, f, level)
+        self.f = f
         self.encoding = 'utf-8'
     
     def close(self):
