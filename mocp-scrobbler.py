@@ -45,7 +45,7 @@ class HardErrorException(ScrobException): pass
 INFO_RE = re.compile(r'^([a-zA-Z]+):\s*(.+)$')
 
 class NullHandler(logging.Handler):
-    def emit(record):
+    def emit(self, record):
         pass
 
 # I'm tired, hungry and pissed off now, so i'm writing this little piece
