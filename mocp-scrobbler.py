@@ -2,31 +2,30 @@
 # -*- coding: utf-8 -*-
 
 # Author: Tomasz 'Fluxid' Kowalczyk
-# e-mail: fluxid@o2.pl
-# jid: fluxid@jabster.pl
+# e-mail and xmpp/jabber: myself@fluxid.pl
 
-import os
-import sys
-import urllib
-import httplib
-from urlparse import urlparse
-import time
-try:
-    from hashlib import md5
-except ImportError:
-    from md5 import new as md5
-import re
-import time
-from threading import Thread
-from ConfigParser import ConfigParser
-import pickle
-import logging
+from configparser import ConfigParser
 import getopt
+from hashlib import md5
+from http.client import HTTPConnection
+import locale
+import logging
+import os
+import pickle
+import re
 import signal
 import subprocess
-import locale
+import sys
+import time
+from threading import Thread
+from urllib.request import urlopen
+from urllib.parse import urlparse, urlencode
+
+log = logging.getLogger('mocp.pyscrobbler')
+log.setLevel(logging.INFO)
 
 _SCROB_FRAC = 0.9
+INFO_RE = re.compile(r'^([a-zA-Z]+):\s*(.+)$')
 
 class ScrobException(Exception):
     def __init__(self, message=''):
@@ -35,14 +34,23 @@ class ScrobException(Exception):
     def __str__(self):
         return self._message
 
-class BannedException(ScrobException): pass
-class BadAuthException(ScrobException): pass
-class BadTimeException(ScrobException): pass
-class FailedException(ScrobException): pass
-class BadSessionException(ScrobException): pass
-class HardErrorException(ScrobException): pass
+class BannedException(ScrobException):
+    pass
 
-INFO_RE = re.compile(r'^([a-zA-Z]+):\s*(.+)$')
+class BadAuthException(ScrobException):
+    pass
+
+class BadTimeException(ScrobException):
+    pass
+
+class FailedException(ScrobException):
+    pass
+
+class BadSessionException(ScrobException):
+    pass
+
+class HardErrorException(ScrobException):
+    pass
 
 class NullHandler(logging.Handler):
     def emit(self, record):
@@ -59,10 +67,11 @@ class StupidStreamHandler(logging.Handler):
     
     def emit(self, record):
         msg = self.format(record)
-        if isinstance(msg, unicode):
-            msg = msg.encode(self.encoding, 'replace')
-        self.s.write(msg)
-        self.s.write('\n')
+        # Don't set encoding on stream we don't own
+        msg = msg.encode(self.encoding, 'replace')
+        self.s.buffer.write(msg)
+        self.s.buffer.write(b'\n')
+        self.s.buffer.flush()
         self.flush()
 
 class StupidFileHandler(StupidStreamHandler):
@@ -70,7 +79,7 @@ class StupidFileHandler(StupidStreamHandler):
         f = open(fname, fwrite)
         StupidStreamHandler.__init__(self, f, level)
         self.f = f
-        self.encoding = 'utf-8'
+        self.encoding = locale.getpreferredencoding() or 'utf-8'
     
     def close(self):
         logging.Handler.close(self)
@@ -87,32 +96,30 @@ class Track(object):
         self.position = int(position)
 
     def __eq__(self, other):
-        return (isinstance(other, self.__class__) and
-                self.artist.lower() == other.artist.lower() and
-                self.title.lower() == other.title.lower())
+        return (
+            isinstance(other, self.__class__) and
+            self.artist.lower() == other.artist.lower() and
+            self.title.lower() == other.title.lower()
+        )
 
     def __ne__(self, other):
         return not self.__eq__(other)
 
-    def __nonzero__(self):
+    def __bool__(self):
         if self.artist and self.title: # and self.length:
             return True
         return False
 
-    def __unicode__(self):
+    def __str__(self):
         if self.artist and self.title:
             if self.album:
-                return u'%s - %s (%s)' % (self.artist, self.title, self.album)
+                return '%s - %s (%s)' % (self.artist, self.title, self.album)
             else:
-                return u'%s - %s' % (self.title, self.artist)
+                return '%s - %s' % (self.title, self.artist)
         else:
-            return u'None'
-
-    def __str__(self):
-        return self.__unicode__().encode(locale.getpreferredencoding())
+            return 'None'
 
     def __repr__(self):
-        # It seems repr must be str not unicode...
         return '<Track: %s>' % self
 
 class Scrobbler(Thread):
@@ -128,51 +135,57 @@ class Scrobbler(Thread):
         self.cache = []
         self.playing = None
         self.notify_sent = False
-        self.logger = None
         self._running = False
         self._authorized = False
 
     def send_encoded(self, url, data):
         url2 = urlparse(url)
-        host = url2[1]
-        request = (url2[2] or '/') + (url2[4] and '?' + url2[4])
+        host = url2.netloc
+        path = url2.path or '/'
+        query = '?' + url2.query if url2.query else ''
+        request = path + query
         
-        data = data.copy()
-        data = dict([ (k.encode('utf-8'), v.encode('utf-8') if isinstance(v, unicode) else str(v)) for k, v in data.iteritems()])
-        data2 = urllib.urlencode(data)
+        data = dict((
+            (k, str(v).encode('utf8'))
+            for k, v in data.items()
+        ))
+        data2 = bytes(urlencode(data), 'ascii')
         
         try:
-            http = httplib.HTTPConnection(host)
+            http = HTTPConnection(host)
             http.putrequest('POST', request)
             http.putheader('Content-Type', 'application/x-www-form-urlencoded')
             http.putheader('User-Agent', 'Fluxid MOC Scrobbler 0.2')
             http.putheader('Content-Length', str(len(data2)))
             http.endheaders()
             http.send(data2)
-            response = http.getresponse().read().upper().strip()
-        except Exception, e:
-            raise HardErrorException, str(e)
+            response = http.getresponse().read().decode('utf8').upper().strip()
+        except Exception as e:
+            raise HardErrorException(str(e))
         if response == 'BADSESSION':
             raise BadSessionException
         elif response.startswith('FAILED'):
-            raise FailedException, response.split(' ', 1)[1].strip() + (' POST = [%s]' % data2)
+            raise FailedException(response.split(' ', 1)[1].strip() + (' POST = [%r]' % data2))
 
     def authorize(self):
-        self.logger.debug(u'Authorizing')
+        log.debug('Authorizing...')
         timestamp = time.time()
-        token = md5(md5(self.password).hexdigest() + str(int(timestamp))).hexdigest()
+        token = md5((
+            md5(self.password.encode('utf-8')).hexdigest() + str(int(timestamp))
+        ).encode('ascii')).hexdigest()
         link = 'http://%s/?hs=true&p=1.2.1&c=mcl&v=1.0&u=%s&t=%d&a=%s' % (self.host, self.login, timestamp, token)
         try:
-            f = urllib.urlopen(link)
-        except Exception, e:
-            raise HardErrorException, str(e)
+            f = urlopen(link)
+        except Exception as e:
+            raise HardErrorException(str(e))
         if f:
             f = f.readlines()
-            first = f[0].upper().strip()
+            f0 = f[0].strip().decode('utf8', 'replace')
+            first = f0.upper()
             if first == 'OK':
-                self.session = f[1].strip()
-                self.np_link = f[2].strip()
-                self.sub_link = f[3].strip()
+                self.session = f[1].strip().decode('ascii')
+                self.np_link = f[2].strip().decode('ascii')
+                self.sub_link = f[3].strip().decode('ascii')
             elif first == 'BANNED':
                 raise BannedException
             elif first == 'BADAUTH':
@@ -180,11 +193,12 @@ class Scrobbler(Thread):
             elif first == 'BADTIME':
                 raise BadTimeException
             elif first.startswith('FAILED'):
-                raise FailedException, f[0].split(' ', 1)[1].strip()
+                raise FailedException(f[0].split(' ', 1)[1].strip())
             else:
-                raise HardErrorException, u'Received unknown response from server: [%s]' % t
+                raise HardErrorException('Received unknown response from server: [%r]' % b'\n'.join(f))
         else:
-            raise HardErrorException, u'Empty response'
+            raise HardErrorException('Empty response')
+        log.debug('Authorized!')
         self._authorized = True
 
     def scrobble(self, track, stream = False):
@@ -229,11 +243,11 @@ class Scrobbler(Thread):
         })
     
     def format_scrobbles(self, scrobbles):
-        x = u', '.join([
-            unicode(s[0])
+        x = ', '.join((
+            str(s[0])
             for s in scrobbles
-        ])
-        return u'[%s]' % x
+        ))
+        return '[%s]' % x
 
     def run(self):
         self._running = True
@@ -243,23 +257,23 @@ class Scrobbler(Thread):
                 try:
                     self.authorize()
                 except BannedException:
-                    self.logger.error(u'Error while authorizing: your account is banned.')
+                    log.error('Error while authorizing: your account is banned.')
                     errord = 1
                 except BadAuthException:
-                    self.logger.error(u'Error while authorizing: incorrect username or password. Please check your login settings.')
+                    log.error('Error while authorizing: incorrect username or password. Please check your login settings.')
                     errord = 1
                 except BadTimeException:
-                    self.logger.error(u'Error while authorizing: incorrect time setting. Please check your clock settings.')
+                    log.error('Error while authorizing: incorrect time setting. Please check your clock settings.')
                     errord = 1
-                except FailedException, e:
-                    self.logger.error(u'Error while authorizing: general failure. Will try again after one minute. Reason: "%s"' % str(e))
+                except FailedException as e:
+                    log.error('Error while authorizing: general failure. Will try again after one minute. Reason: "%s"' % str(e))
                     errord = 2
-                except HardErrorException, e:
-                    self.logger.error(u'Critical error while authorizing. Check your internet connection. Or maybe servers are dead? Will try again after one minute. Reason: "%s"' % str(e))
+                except HardErrorException as e:
+                    log.error('Critical error while authorizing. Check your internet connection. Or maybe servers are dead? Will try again after one minute. Reason: "%s"' % str(e))
                     errord = 2
 
                 if errord == 1:
-                    self.logger.info(u'Scrobbler will work in offline mode')
+                    log.info('Scrobbler will work in offline mode')
                     self._running = False
                 elif errord == 2:
                     self.nice_sleep(60)
@@ -270,28 +284,28 @@ class Scrobbler(Thread):
                 if self.cache:
                     slice = self.cache[:10]
                     if len(slice) == 1:
-                        self.logger.debug(u'Submitting track: %s' % slice[0][0])
+                        log.debug('Submitting track: %s' % slice[0][0])
                     else:
-                        self.logger.debug(u'Submitting %d tracks: %s' % (len(slice), self.format_scrobbles(slice)))
+                        log.debug('Submitting %d tracks: %s' % (len(slice), self.format_scrobbles(slice)))
                     self.submit_scrobble(slice)
-                    self.logger.debug(u'Submitted')
+                    log.debug('Submitted')
                     del self.cache[0:len(slice)]
 
                 if self.playing and not self.notify_sent:
-                    self.logger.debug(u'Sending notify')
+                    log.debug('Sending notify')
                     self.submit_notify(self.playing)
-                    self.logger.debug(u'Notify sent')
+                    log.debug('Notify sent')
                     self.notify_sent = True
 
                 time.sleep(1)
             except BadSessionException:
-                self.logger.debug(u'Session timed out')
+                log.debug('Session timed out')
                 self._authorized = False
-            except FailedException, e:
-                self.logger.error(u'Error while submission: general failure. Trying again after 10 seconds. Reason: "%s".' % str(e))
+            except FailedException as e:
+                log.error('Error while submission: general failure. Trying again after 10 seconds. Reason: "%s".' % str(e))
                 self.nice_sleep(10)
-            except HardErrorException, e:
-                self.logger.error(u'Critical error while submission. Check your internet connection. Trying again after 10 seconds. Exception was: "%s"' % str(e))
+            except HardErrorException as e:
+                log.error('Critical error while submission. Check your internet connection. Trying again after 10 seconds. Exception was: "%s"' % str(e))
                 self.nice_sleep(10)
 
     def nice_sleep(self, seconds):
@@ -310,13 +324,14 @@ def get_mocp():
         p = subprocess.Popen('mocp -i', shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, close_fds=True)
     except:
         return (None, 'stop')
-    pstdout, pstderr = p.communicate()
+    pstdout, _ = p.communicate()
+    pstdout = pstdout.decode('utf8', 'replace') # mocp -i output doesn't depend on locale
     for line in pstdout.splitlines():
         m = INFO_RE.match(line)
         if m:
             key, value = m.groups()
             if value:
-                info[key.lower()] = value.strip().decode('utf8', 'replace') # mocp -i output isn't depended on locale
+                info[key.lower()] = value.strip()
 
     artist = info.get('artist', '')
     title = info.get('songtitle', '')
@@ -340,6 +355,7 @@ def main():
     cachepath = path + 'cache'
     pidfile = path + 'pid'
     logfile = path + 'scrobbler.log'
+    exit_code = 0
 
     if not os.path.isdir(path):
         os.mkdir(path)
@@ -348,9 +364,9 @@ def main():
     longargs = 'daemon config= offline verbose quiet help kill'
     try:
         opts, args = getopt.getopt(sys.argv[1:], shortargs, longargs.split())
-    except getopt.error, e:
-        print >>sys.stderr, str(e)
-        print >>sys.stderr, 'Use --help parameter to get more info'
+    except getopt.error as e:
+        print(str(e), file=sys.stderr)
+        print('Use --help parameter to get more info', file=sys.stderr)
         return
     
     daemon = False
@@ -361,15 +377,17 @@ def main():
 
     for o, v in opts:
         if o in ('-h', '--help'):
-            print 'mocp-scrobbler.py 0.2\n' \
-            'Usage: mocp-scrobbler.py [--daemon] [--offline] [--verbose | --quiet] [--kill] [--config=FILE]\n' \
-            '  -d, --daemon       Run in background, messages will be written to log file\n' \
-            '  -o, --offline      Don\'t connect to service, put everything in cache\n' \
-            '  -v, --verbose      Write more messages to console/log\n' \
-            '  -q, --quiet        Write only errors to console/log\n' \
-            '  -k, --kill         Kill existing scrobbler instance and exit\n' \
-            '  -c, --config=FILE  Use this file instead of default config'
-            return
+            print(
+                'mocp-scrobbler.py 0.2\n'
+                'Usage: mocp-scrobbler.py [--daemon] [--offline] [--verbose | --quiet] [--kill] [--config=FILE]\n'
+                '  -d, --daemon       Run in background, messages will be written to log file\n'
+                '  -o, --offline      Don\'t connect to service, put everything in cache\n'
+                '  -v, --verbose      Write more messages to console/log\n'
+                '  -q, --quiet        Write only errors to console/log\n'
+                '  -k, --kill         Kill existing scrobbler instance and exit\n'
+                '  -c, --config=FILE  Use this file instead of default config'
+            )
+            return 1
         daemon = o in ('-d', '--daemon')
         offline = o in ('-o', '--offline')
         if o in ('-v', '--verbose'):
@@ -384,25 +402,26 @@ def main():
     
     if os.path.isfile(pidfile):
         if kill:
-            if not quiet: print 'Attempting to kill existing scrobbler process...'
+            if not quiet:
+                print('Attempting to kill existing scrobbler process...')
         else:
-            print >>sys.stderr, 'Pidfile found! Attempting to kill existing scrobbler process...'
+            print('Pidfile found! Attempting to kill existing scrobbler process...', file=sys.stderr)
         try:
-            f = open(pidfile)
-            pid = int(f.read().strip())
-            f.close()
+            with open(pidfile) as f:
+                pid = int(f.read().strip())
             os.kill(pid, signal.SIGTERM)
             time.sleep(1)
-        except OSError, e:
+        except (OSError, ValueError) as e:
             os.remove(pidfile)
-        except IOError, e:
-            print >>sys.stderr, 'Error occured while reading pidfile. Check if process is really running, delete pidfile ("%s") and try again. Error was: "%s"' % (pidfile, str(e))
-            return
+        except IOError as e:
+            print('Error occured while reading pidfile. Check if process is really running, delete pidfile ("%s") and try again. Error was: "%s"' % (pidfile, str(e)), file=sys.stderr)
+            return 1
     elif kill:
-        if not quiet: print 'Pidfile not found.'
+        if not quiet:
+            print('Pidfile not found.')
 
     if os.path.isfile(pidfile):
-        print 'Waiting for existing process to end...'
+        print('Waiting for existing process to end...')
         while os.path.isfile(pidfile):
             time.sleep(1)
     
@@ -415,8 +434,8 @@ def main():
         password = config.get('scrobbler', 'password')
         streams = config.get('scrobbler', 'password')
     except:
-        print >>sys.stderr, 'Not configured. Edit file: %s' % configpath
-        return
+        print('Not configured. Edit file: %s' % configpath, file=sys.stderr)
+        return 1
 
     forked = False
     if daemon:
@@ -424,26 +443,23 @@ def main():
             pid = os.fork()
             if pid:
                 if not quiet:
-                    print 'Scrobbler daemon started with pid %d' % pid
+                    print('Scrobbler daemon started with pid %d' % pid)
                 sys.exit(0)
             forked = True
-        except Exception, e:
-            print >>sys.stderr, 'Could not start daemonize, scrobbler will run in foreground. Error was: "%s"' % str(e)
+        except Exception as e:
+            print('Could not daemonize, scrobbler will run in foreground. Error was: "%s"' % str(e), file=sys.stderr)
 
-    logger = logging.getLogger('mocp.pyscrobbler')
-    logger.setLevel(logging.INFO)
     if verbose:
-        logger.setLevel(logging.DEBUG)
+        log.setLevel(logging.DEBUG)
     elif quiet:
-        logger.setLevel(logging.WARNING)
+        log.setLevel(logging.WARNING)
 
     try:
-        f = open(pidfile, 'w')
-        print >>f, os.getpid()
-        f.close()
-    except Exception, e:
-        print logger.error(u'Can\'t write to pidfile, exiting')
-        return
+        with open(pidfile, 'w') as f:
+            f.write(str(os.getpid()))
+    except Exception as e:
+        print('Can\'t write to pidfile, exiting. Error was: "%s"' % str(e), file=sys.stderr)
+        return 1
 
     if forked:
         try:
@@ -454,15 +470,14 @@ def main():
                 lout = StupidFileHandler(logfile, 'w')
             except:
                 lout = NullHandler()
-        formatter = logging.Formatter(u'%(levelname)s %(asctime)s %(message)s')
+        formatter = logging.Formatter('%(levelname)s %(asctime)s %(message)s')
         lout.setFormatter(formatter)
-        logger.addHandler(lout)
+        log.addHandler(lout)
     else:
         lout = StupidStreamHandler(sys.stdout)
-        logger.addHandler(lout)
+        log.addHandler(lout)
 
     lastfm = Scrobbler('post.audioscrobbler.com', login, password)
-    lastfm.logger = logger
     
     if not offline:
         lastfm.start()
@@ -487,11 +502,10 @@ def main():
     lasttime = 0
     
     # the code below sucks a little...
-    global running
     running = True
     def handler(i, j):
-        global running
-        logger.info(u'Got signal, shutting down...')
+        nonlocal running
+        log.info('Got signal, shutting down...')
         running = False
         signal.signal(signal.SIGQUIT, signal.SIG_IGN)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -521,18 +535,18 @@ def main():
                         
                         if unscrobbled and toscrobble:
                             if state == 'stop':
-                                logger.info(u'Scrobbling [on stop]')
+                                log.info('Scrobbling [on stop]')
                             else:
-                                logger.info(u'Scrobbling [on change]')
+                                log.info('Scrobbling [on change]')
                             lastfm.scrobble(oldtrack, not oldtrack.length)
 
                     if newtrack:
                         if not newtrack.length:
-                            logger.info(u'Now playing (stream): %s' % newtrack)
+                            log.info('Now playing (stream): %s' % newtrack)
                         elif b:
-                            logger.info(u'Now playing (repeated): %s' % newtrack)
+                            log.info('Now playing (repeated): %s' % newtrack)
                         else:
-                            logger.info(u'Now playing: %s' % newtrack)
+                            log.info('Now playing: %s' % newtrack)
                     
                     if state != 'stop':
                         oldtrack = newtrack
@@ -553,7 +567,7 @@ def main():
                     unnotified = False
                 
                 if newtrack and unscrobbled and newtrack.length >= 30 and (newtrack.position > newtrack.length * _SCROB_FRAC):
-                    logger.info(u'Scrobbling [on %d%%]' % int(_SCROB_FRAC * 100))
+                    log.info('Scrobbling [on %d%%]' % int(_SCROB_FRAC * 100))
                     lastfm.scrobble(newtrack)
                     unscrobbled = False
                 
@@ -561,8 +575,8 @@ def main():
     except KeyboardInterrupt:
         pass
     except Exception:
-        import traceback
-        traceback.print_exc(file=sys.stdout)
+        log.exception('Unexpected error')
+        exit_code = 1
     
     if not offline:
         lastfm.stop()
@@ -578,6 +592,7 @@ def main():
             pass
 
     os.remove(pidfile)
+    return exit_code
 
 if __name__ == '__main__':
     main()

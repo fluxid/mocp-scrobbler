@@ -1,4 +1,4 @@
-# MOCp-Scrobbler
+# MOCp-Scrobbler (For Python3)
 
 Last.fm scrobbler for MOC audio player with support for now-playing notifications, daemonization and cache.
 Works with  internet streams (with properly set tags) and scrobbles on 90% of track. Supports scrobbling of looped track too.
