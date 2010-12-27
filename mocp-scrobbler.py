@@ -355,6 +355,7 @@ def main():
     cachepath = path + 'cache'
     pidfile = path + 'pid'
     logfile = path + 'scrobbler.log'
+    hostname = 'post.audioscrobbler.com'
     exit_code = 0
 
     if not os.path.isdir(path):
@@ -378,14 +379,18 @@ def main():
     for o, v in opts:
         if o in ('-h', '--help'):
             print(
-                'mocp-scrobbler.py 0.2\n'
-                'Usage: mocp-scrobbler.py [--daemon] [--offline] [--verbose | --quiet] [--kill] [--config=FILE]\n'
-                '  -d, --daemon       Run in background, messages will be written to log file\n'
-                '  -o, --offline      Don\'t connect to service, put everything in cache\n'
-                '  -v, --verbose      Write more messages to console/log\n'
-                '  -q, --quiet        Write only errors to console/log\n'
-                '  -k, --kill         Kill existing scrobbler instance and exit\n'
-                '  -c, --config=FILE  Use this file instead of default config'
+                'mocp-scrobbler.py 0.2',
+                'Usage:',
+                '  mocp-scrobbler.py [--daemon] [--offline] [--verbose | --quiet] [--config=FILE]',
+                '  mocp-scrobbler.py --kill [--verbose | --quiet]',
+                '',
+                '  -c, --config=FILE  Use this file instead of default config',
+                '  -d, --daemon       Run in background, messages will be written to log file',
+                '  -k, --kill         Kill existing scrobbler instance and exit',
+                '  -o, --offline      Don\'t connect to service, put everything in cache',
+                '  -q, --quiet        Write only errors to console/log',
+                '  -v, --verbose      Write more messages to console/log',
+                sep='\n'
             )
             return 1
         daemon = o in ('-d', '--daemon')
@@ -427,12 +432,16 @@ def main():
     
     if kill: return
 
-    config = ConfigParser()
+    config = ConfigParser(defaults = dict(
+        streams = 'true',
+        hostname = hostname,
+    ))
     try:
         config.read(configpath)
         login = config.get('scrobbler', 'login')
         password = config.get('scrobbler', 'password')
-        streams = config.get('scrobbler', 'password')
+        streams = config.get('scrobbler', 'streams').lower in ('true', '1', 'yes')
+        hostname = config.get('scrobbler', 'hostname', hostname)
     except:
         print('Not configured. Edit file: %s' % configpath, file=sys.stderr)
         return 1
@@ -467,7 +476,7 @@ def main():
         except:
             try:
                 logfile = os.getenv('TEMP', '/tmp/') + 'mocp-pyscrobbler.log'
-                lout = StupidFileHandler(logfile, 'w')
+                lout = StupidFileHandler(logfile, 'wa')
             except:
                 lout = NullHandler()
         formatter = logging.Formatter('%(levelname)s %(asctime)s %(message)s')
@@ -477,7 +486,7 @@ def main():
         lout = StupidStreamHandler(sys.stdout)
         log.addHandler(lout)
 
-    lastfm = Scrobbler('post.audioscrobbler.com', login, password)
+    lastfm = Scrobbler(hostname, login, password)
     
     if not offline:
         lastfm.start()
@@ -591,8 +600,12 @@ def main():
         except:
             pass
 
-    os.remove(pidfile)
+    try:
+        os.remove(pidfile)
+    except:
+        pass
+
     return exit_code
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main() or 0)
