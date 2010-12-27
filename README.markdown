@@ -38,5 +38,6 @@ Instead of running in daemon mode, you can run it in GNU Screen:
 ## Troubleshooting
 
 Before issuing bugs, please check the following:
-1. Make sure you're using Python in at least version 3.1.
-2. Check if ``mocp -i`` prints what track is currently playing
+
+1.  Make sure you're using Python in at least version 3.1.
+1.  Check if ``mocp -i`` prints what track is currently playing
