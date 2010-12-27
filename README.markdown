@@ -17,7 +17,7 @@ Works with internet streams (only with properly set tags - usually Icecast strea
       -v, --verbose      Write more messages to console/log
 
 Just put this python script in your $PATH.
-Before running you must place configuration file in ``~/.mocpscrob/config`` which should look like below:
+Before running you must create configuration file ``~/.mocpscrob/config`` which should look like below:
 
     [scrobbler]
     login=YOUR_LASTFM_LOGIN
@@ -25,12 +25,18 @@ Before running you must place configuration file in ``~/.mocpscrob/config`` whic
     streams=true
     hostname=post.audioscrobbler.com
 
-streams and hostname are not required, and given values are default.
-streams turns on scrobbling when listening to internet streams. If it works incorrectly, set it to false.
-hostname may be useful if you want to use different scrobbling service, for example libre.fm (turtle.libre.fm).
+``streams`` and ``hostname`` are not required, and given values are default.
+``streams`` turns on scrobbling when listening to internet streams. If it works incorrectly, set it to false.
+``hostname`` may be useful if you want to use different scrobbling service, for example libre.fm (turtle.libre.fm).
 
-Cache, pidfile and logs are placed in ``~/.mocpscrob/config``.
+Cache, pidfile and logs are placed in ``~/.mocpscrob/``.
 
 Instead of running in daemon mode, you can run it in GNU Screen:
 
     % screen -dR scrob mocp-scrobbler.py -v
+
+## Troubleshooting
+
+Before issuing bugs, please check the following:
+1. Make sure you're using Python in at least version 3.1.
+2. Check if ``mocp -i`` prints what track is currently playing
