@@ -4,7 +4,7 @@
 # Author: Tomasz 'Fluxid' Kowalczyk
 # e-mail and xmpp/jabber: myself@fluxid.pl
 
-from configparser import ConfigParser
+from configparser import SafeConfigParser
 import getopt
 from hashlib import md5
 from http.client import HTTPConnection
@@ -111,7 +111,7 @@ class Track(object):
         return False
 
     def __str__(self):
-        if self.artist and self.title:
+        if self:
             if self.album:
                 return '%s - %s (%s)' % (self.artist, self.title, self.album)
             else:
@@ -123,12 +123,12 @@ class Track(object):
         return '<Track: %s>' % self
 
 class Scrobbler(Thread):
-    def __init__(self, host, login, password):
+    def __init__(self, host, login, password_md5):
         Thread.__init__(self)
 
         self.host = host
         self.login = login
-        self.password = password
+        self.password_md5 = password_md5
         self.session = None
         self.np_link = None
         self.sub_link = None
@@ -170,9 +170,7 @@ class Scrobbler(Thread):
     def authorize(self):
         log.debug('Authorizing...')
         timestamp = time.time()
-        token = md5((
-            md5(self.password.encode('utf-8')).hexdigest() + str(int(timestamp))
-        ).encode('ascii')).hexdigest()
+        token = md5((self.password_md5 + str(int(timestamp))).encode('ascii')).hexdigest()
         link = 'http://%s/?hs=true&p=1.2.1&c=mcl&v=1.0&u=%s&t=%d&a=%s' % (self.host, self.login, timestamp, token)
         try:
             f = urlopen(link)
@@ -432,19 +430,39 @@ def main():
     
     if kill: return
 
-    config = ConfigParser(defaults = dict(
-        streams = 'true',
-        hostname = hostname,
-    ))
+    config = SafeConfigParser()
+
     try:
         config.read(configpath)
-        login = config.get('scrobbler', 'login')
-        password = config.get('scrobbler', 'password')
-        streams = config.get('scrobbler', 'streams').lower in ('true', '1', 'yes')
-        hostname = config.get('scrobbler', 'hostname', hostname)
     except:
         print('Not configured. Edit file: %s' % configpath, file=sys.stderr)
         return 1
+
+    getter = lambda k, f: config.get('scrobbler', k) if config.has_option('scrobbler', k) else f
+
+    login = getter('login', None)
+    password = getter('password', None)
+    password_md5 = getter('password_md5', None)
+    streams = getter('streams', '1').lower in ('true', '1', 'yes')
+    hostname = getter('hostname', hostname)
+
+    if not login:
+        print('Missing login. Edit file: %s' % configpath, file=sys.stderr)
+        return 1
+
+    if not (password or password_md5):
+        print('Missing password. Edit file: %s' % configpath, file=sys.stderr)
+        return 1
+
+    if password:
+        password_md5 = md5(password.encode('utf-8')).hexdigest()
+        config.set('scrobbler', 'password_md5', password_md5)
+        config.remove_option('scrobbler', 'password')
+        with open(configpath, 'w') as f:
+            config.write(f)
+        print('Your password wasn\'t hashed - config file has been updated')
+
+    del password
 
     forked = False
     if daemon:
@@ -486,7 +504,7 @@ def main():
         lout = StupidStreamHandler(sys.stdout)
         log.addHandler(lout)
 
-    lastfm = Scrobbler(hostname, login, password)
+    lastfm = Scrobbler(hostname, login, password_md5)
     
     if not offline:
         lastfm.start()
@@ -510,7 +528,6 @@ def main():
     maxsec = 0
     lasttime = 0
     
-    # the code below sucks a little...
     running = True
     def handler(i, j):
         nonlocal running
