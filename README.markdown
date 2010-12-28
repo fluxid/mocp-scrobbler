@@ -57,7 +57,7 @@ Maybe in future, but as different project.
 
 ### What about Python 2.x?
 
-Not supported anymore, sorry. Old code can be found in ``master`` branch, but it will land in py2 branch soon.
+Not supported, sorry. Old code can be found in ``old-python2`` tag. It has small bugs, so be prepared.
 
 ### What about scrobbling API 2?
 
