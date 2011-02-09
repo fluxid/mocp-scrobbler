@@ -19,7 +19,7 @@ import sys
 import time
 from threading import Thread
 from urllib.request import urlopen
-from urllib.parse import urlparse, urlencode
+from urllib.parse import urlparse, quote_from_bytes, quote
 
 log = logging.getLogger('mocp.pyscrobbler')
 log.setLevel(logging.INFO)
@@ -145,11 +145,10 @@ class Scrobbler(Thread):
         query = '?' + url2.query if url2.query else ''
         request = path + query
         
-        data = dict((
-            (k, str(v).encode('utf8'))
+        data2 = '&'.join((
+            quote(k) + '=' + quote_from_bytes(str(v).encode('utf8'))
             for k, v in data.items()
-        ))
-        data2 = bytes(urlencode(data), 'ascii')
+        )).encode('ascii')
         
         try:
             http = HTTPConnection(host)
