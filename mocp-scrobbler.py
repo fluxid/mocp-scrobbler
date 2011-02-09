@@ -504,19 +504,26 @@ def main():
         log.addHandler(lout)
 
     lastfm = Scrobbler(hostname, login, password_md5)
+
+    if os.path.isfile(cachepath):
+        cache = None
+
+        try:
+            with open(cachepath, 'rb') as f:
+                cache = pickle.load(f)
+        except Exception as e:
+            log.exception('Error while trying to read scrobbling cache:')
+
+        if cache and isinstance(cache, list):
+            lastfm.cache = cache
+
+        try:
+            os.remove(cachepath)
+        except:
+            pass
     
     if not offline:
         lastfm.start()
-
-    try:
-        cachefile = file(cachepath, 'r')
-        cache = pickle.load(cachefile)
-        if cache and isinstance(cache, list):
-            lastfm.cache = cache
-        cachefile.close()
-        os.remove(cachepath)
-    except:
-        pass
    
     unscrobbled = True
     unnotified = True
@@ -598,9 +605,9 @@ def main():
                 
             time.sleep(5)
     except KeyboardInterrupt:
-        pass
+        log.info('Keyboard interrupt. Please wait until I shut down')
     except Exception:
-        log.exception('Unexpected error')
+        log.exception('An error occured:')
         exit_code = 1
     
     if not offline:
@@ -610,11 +617,10 @@ def main():
 
     if lastfm.cache:
         try:
-            cachefile = file(cachepath, 'wb')
-            pickle.dump(lastfm.cache, cachefile, 2)
-            cachefile.close()
+            with open(cachepath, 'wb') as f:
+                pickle.dump(lastfm.cache, f, pickle.HIGHEST_PROTOCOL)
         except:
-            pass
+            log.exception('Error while trying to save scrobbling cache:')
 
     try:
         os.remove(pidfile)
